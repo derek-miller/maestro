@@ -17,6 +17,7 @@ import static org.junit.Assert.assertEquals;
 
 import com.netflix.maestro.MaestroBaseTest;
 import com.netflix.maestro.models.definition.User;
+import com.netflix.maestro.models.error.Details;
 import com.netflix.maestro.models.instance.StepDependencyMatchStatus;
 import java.io.IOException;
 import java.util.List;
@@ -85,6 +86,66 @@ public class SignalDependenciesTest extends MaestroBaseTest {
   }
 
   @Test
+  public void shouldMarkPendingAsUnmatched() {
+    boolean changed = signalDependencies.markPendingAsUnmatched();
+    assertThat(changed).isTrue();
+    assertThat(signalDependencies.isSatisfied()).isFalse();
+    assertThat(signalDependencies.getDependencies())
+        .first()
+        .matches(i -> i.getStatus() == StepDependencyMatchStatus.UNMATCHED);
+  }
+
+  @Test
+  public void shouldOnlyMarkPendingDependenciesAsUnmatched() {
+    var matched = dependency("matched_signal", StepDependencyMatchStatus.MATCHED);
+    var skipped = dependency("skipped_signal", StepDependencyMatchStatus.SKIPPED);
+    var pending = dependency("pending_signal", StepDependencyMatchStatus.PENDING);
+    var dependencies = new SignalDependencies();
+    dependencies.setDependencies(List.of(matched, skipped, pending));
+
+    boolean changed = dependencies.markPendingAsUnmatched();
+
+    assertThat(changed).isTrue();
+    assertThat(matched.getStatus()).isEqualTo(StepDependencyMatchStatus.MATCHED);
+    assertThat(skipped.getStatus()).isEqualTo(StepDependencyMatchStatus.SKIPPED);
+    assertThat(pending.getStatus()).isEqualTo(StepDependencyMatchStatus.UNMATCHED);
+  }
+
+  @Test
+  public void shouldReportNoChangeWhenNoPendingDependencies() {
+    var matched = dependency("matched_signal", StepDependencyMatchStatus.MATCHED);
+    var skipped = dependency("skipped_signal", StepDependencyMatchStatus.SKIPPED);
+    var dependencies = new SignalDependencies();
+    dependencies.setDependencies(List.of(matched, skipped));
+
+    assertThat(dependencies.markPendingAsUnmatched()).isFalse();
+    assertThat(matched.getStatus()).isEqualTo(StepDependencyMatchStatus.MATCHED);
+    assertThat(skipped.getStatus()).isEqualTo(StepDependencyMatchStatus.SKIPPED);
+  }
+
+  @Test
+  public void shouldNotRemarkFailedDependencyAsUnmatched() {
+    var dependency = signalDependencies.getDependencies().getFirst();
+    dependency.markFailed(Details.create("boom"));
+
+    boolean changed = signalDependencies.markPendingAsUnmatched();
+
+    assertThat(changed).isFalse();
+    assertThat(dependency.getStatus()).isEqualTo(StepDependencyMatchStatus.FAILED);
+  }
+
+  @Test
+  public void shouldMarkDependencyFailedWithDetails() {
+    var dependency = signalDependencies.getDependencies().getFirst();
+
+    dependency.markFailed(Details.create("denied"));
+
+    assertThat(dependency.getStatus()).isEqualTo(StepDependencyMatchStatus.FAILED);
+    assertThat(dependency.getDetails()).isNotNull();
+    assertThat(dependency.getDetails().getMessage()).isEqualTo("denied");
+  }
+
+  @Test
   public void shouldByPassStepDependencies() {
     User user = User.create("maestro");
     long actionTime = 12345L;
@@ -94,5 +155,13 @@ public class SignalDependenciesTest extends MaestroBaseTest {
         .extracting("message")
         .isEqualTo("Signal step dependencies have been bypassed by user [maestro]");
     assertThat(signalDependencies.getInfo()).extracting("timestamp").isEqualTo(actionTime);
+  }
+
+  private static SignalDependencies.SignalDependency dependency(
+      String name, StepDependencyMatchStatus status) {
+    var dependency = new SignalDependencies.SignalDependency();
+    dependency.setName(name);
+    dependency.setStatus(status);
+    return dependency;
   }
 }
